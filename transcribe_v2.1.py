@@ -9,17 +9,20 @@ from datetime import datetime
 from openai import OpenAI
 from dotenv import load_dotenv
 
-# ----------------------------------------------------------------------------
-# Load environment variables and initialize OpenAI client
-# ----------------------------------------------------------------------------
+
+SUBJECT_KEYWORDS = ["ai", 
+                    "biology",
+                    "reading note"]
+
+
 load_dotenv()
 client = OpenAI(
     api_key=os.getenv("OPENAI_API_KEY"),
 )
 
-# ----------------------------------------------------------------------------
+
 # Audio Transcription Function
-# ----------------------------------------------------------------------------
+
 def whisper_transcribe(audio_file_path):
     """
     Transcribe the audio file using OpenAI's Whisper API.
@@ -59,9 +62,9 @@ def whisper_transcribe(audio_file_path):
         print(f"Error during transcription: {str(e)}")
         return None
 
-# ----------------------------------------------------------------------------
-# Text Processing
-# ----------------------------------------------------------------------------
+
+# Text Processing Functions
+
 def split_into_sentences(text):
     """
     Improved sentence splitter using regex that separates on .?! but 
@@ -93,10 +96,8 @@ def group_sentences_into_paragraphs(sentences, paragraph_size=3):
 def remove_meta_talk(text):
     """
     Removes common lines that might appear in GPT responses, such as
-    'Certainly!', 'Sure!', or 'As an AI language model...' 
-    This is a simple regex-based filter.
+    'Certainly!', 'Sure!', or 'As an AI language model...'
     """
-    # Define some patterns that typically indicate "meta" lines
     meta_patterns = [
         r"^Certainly.*",
         r"^Sure.*",
@@ -110,7 +111,6 @@ def remove_meta_talk(text):
     cleaned_lines = []
     
     for line in lines:
-        # If line matches any "meta" pattern (case-insensitive), skip it
         if any(re.match(pattern, line.strip(), re.IGNORECASE) for pattern in meta_patterns):
             continue
         cleaned_lines.append(line)
@@ -121,7 +121,6 @@ def process_with_gpt(text, client):
     """
     Process text through GPT to improve clarity while maintaining core meaning.
     """
-    # Enhanced system prompt that explicitly forbids meta disclaimers
     system_prompt = (
         "You are a minimal text editor. Your task is to:\n"
         "1. Fix only obvious grammar mistakes\n"
@@ -151,7 +150,6 @@ def process_with_gpt(text, client):
             max_tokens=1500
         )
         gpt_output = response.choices[0].message.content.strip()
-        # Remove any possible meta lines
         cleaned_output = remove_meta_talk(gpt_output)
         return cleaned_output
     except Exception as e:
@@ -176,12 +174,9 @@ def basic_cleaning(final_paragraph_blocks, client=None):
             if not line:
                 continue
 
-            # Remove filler words
             line = filler_pattern.sub("", line)
-            # Remove extra spaces
             line = re.sub(r"\s+", " ", line).strip()
 
-            # Capitalize first character if not bullet
             if line.startswith("* "):
                 bullet_content = line[2:].strip()
                 if bullet_content:
@@ -194,7 +189,6 @@ def basic_cleaning(final_paragraph_blocks, client=None):
         
         cleaned_block = "\n".join(cleaned_lines)
         
-        # If OpenAI client is provided, do a GPT pass
         if client and cleaned_block:
             cleaned_block = process_with_gpt(cleaned_block, client)
             
@@ -202,9 +196,9 @@ def basic_cleaning(final_paragraph_blocks, client=None):
     
     return cleaned_paragraphs
 
-# ----------------------------------------------------------------------------
-# Audio Recording and File Appending
-# ----------------------------------------------------------------------------
+
+# Audio Recording Function
+
 def record_audio(output_filename="recorded_audio.wav"):
     """
     Record audio from the microphone until Enter is pressed.
@@ -228,7 +222,6 @@ def record_audio(output_filename="recorded_audio.wav"):
         while True:
             data = stream.read(chunk_size)
             frames.append(data)
-            # Check if Enter is pressed
             if os.name == 'nt':  # Windows
                 import msvcrt
                 if msvcrt.kbhit() and msvcrt.getch() == b'\r':
@@ -253,21 +246,37 @@ def record_audio(output_filename="recorded_audio.wav"):
 
     return output_filename
 
-def append_to_text_file(text):
+# Subject Determination Function
+
+def determine_subject(raw_text, keywords):
     """
-    Always store the file in a 'transcriptions' folder relative to this script.
-    The file is named w{week}_{Month}_{Year}.txt.
-    This updated version ensures that for transcriptions on the same day,
-    only the latest transcription has the date header.
+    Determines the subject based on the first or last five words of the raw transcription.
+    Returns the subject keyword if found, otherwise returns None.
+    """
+    words = raw_text.split()
+    if not words:
+        return None
+    first_five = " ".join(words[:5]).lower()
+    last_five = " ".join(words[-5:]).lower()
+    for keyword in keywords:
+        if keyword.lower() in first_five or keyword.lower() in last_five:
+            return keyword.lower()
+    return None
+
+
+# File Appending Functions
+
+def append_to_weekly_file(text):
+    """
+    Append the transcription to a weekly file.
+    File name format: w{week}_{Month}_{Year}.txt
+    The latest transcription is at the top with a date header.
     """
     current_date = datetime.now()
-    
-    # Path is always relative to this script's location
     script_dir = os.path.dirname(os.path.abspath(__file__))
     base_dir = os.path.join(script_dir, "transcriptions")
     os.makedirs(base_dir, exist_ok=True)
     
-    # File name: wWeek_Month_Year.txt
     iso_calendar = current_date.isocalendar()
     week_number = iso_calendar[1]
     year = iso_calendar[0]
@@ -275,15 +284,12 @@ def append_to_text_file(text):
     week_file = f"w{week_number}_{month_str}_{year}.txt"
     file_path = os.path.join(base_dir, week_file)
 
-    # Today's date header line
     current_date_str = current_date.strftime("%A, %B %d, %Y")
     header_line = f"[{current_date_str}]"
 
-    # Read existing content (skip the first two header lines if present)
     try:
         with open(file_path, "r", encoding="utf-8") as f:
             lines = f.readlines()
-            # Assume the first two lines are the "Total words:" header and a blank line
             if len(lines) > 2:
                 existing_lines = lines[2:]
             else:
@@ -291,47 +297,93 @@ def append_to_text_file(text):
     except FileNotFoundError:
         existing_lines = []
 
-    # Remove any occurrence of today's header from the existing transcription blocks
     filtered_lines = [line for line in existing_lines if line.strip() != header_line]
     existing_content = "".join(filtered_lines)
 
-    # Create new block: header + transcription text + some spacing
     new_block = f"{header_line}\n{text}\n\n"
     final_text = new_block + existing_content
 
-    # Count total words and update the file header accordingly
     total_words = len(final_text.split())
     with open(file_path, "w", encoding="utf-8") as f:
         f.write(f"Total words: {total_words}\n\n{final_text}")
 
     return file_path
+
+def append_to_subject_file(text, subject):
+    """
+    Append the transcription to a subject-specific file.
+    File name format: {subject}.txt
+    The latest transcription block includes a month header with a counter for transcriptions.
+    If a transcription for the current month already exists, its header is removed and replaced.
+    """
+    current_date = datetime.now()
+    current_month = current_date.strftime("%B")
+    
+    script_dir = os.path.dirname(os.path.abspath(__file__))
+    base_dir = os.path.join(script_dir, "transcriptions")
+    os.makedirs(base_dir, exist_ok=True)
+    
+    subject_file = os.path.join(base_dir, f"{subject.lower()}.txt")
+    
+    if os.path.exists(subject_file):
+        with open(subject_file, "r", encoding="utf-8") as f:
+            content = f.read()
+    else:
+        content = ""
+    
+    lines = content.splitlines()
+    count = 0
+    if lines and re.match(r'^\[Month: (\w+) \| Count: (\d+)\]$', lines[0]):
+        m = re.match(r'^\[Month: (\w+) \| Count: (\d+)\]$', lines[0])
+        header_month = m.group(1)
+        header_count = int(m.group(2))
+        if header_month.lower() == current_month.lower():
+            count = header_count
+            content = "\n".join(lines[1:]).lstrip()
+    
+    count += 1
+    new_header = f"[Month: {current_month} | Count: {count}]"
+    new_block = f"{new_header}\n{text}\n\n"
+    final_content = new_block + content
+    
+    with open(subject_file, "w", encoding="utf-8") as f:
+        f.write(final_content)
+    return subject_file
+
 # ----------------------------------------------------------------------------
 # Main Entry Point
 # ----------------------------------------------------------------------------
 def main():
     # Part 1: Record and Transcribe Audio
     audio_file_path = record_audio()
-    transcribed_text = whisper_transcribe(audio_file_path)
+    raw_transcribed_text = whisper_transcribe(audio_file_path)
     
-    if not transcribed_text:
+    if not raw_transcribed_text:
         print("Transcription failed or returned empty.")
         return
 
-    # Part 2: Formatting the Transcribed Text
-    sentences = split_into_sentences(transcribed_text)
+    # Part 2: Determine if transcription matches a subject based on criteria
+    subject = determine_subject(raw_transcribed_text, SUBJECT_KEYWORDS)
+
+    # Part 3: Formatting the Transcribed Text
+    sentences = split_into_sentences(raw_transcribed_text)
     paragraphs = group_sentences_into_paragraphs(sentences, paragraph_size=3)
     uncleaned_output = "\n\n".join(paragraphs)
     
-    # Part 3: Cleaning with GPT processing
+    # Part 4: Cleaning with GPT processing
     cleaned_paragraphs = basic_cleaning(paragraphs, client)
     final_output = "\n\n".join(cleaned_paragraphs)
     
-    # Part 4: Append to file and print results
-    output_file = append_to_text_file(final_output)
+    # Part 5: Append to the appropriate file based on subject criteria
+    if subject:
+        output_file = append_to_subject_file(final_output, subject)
+        print(f"\nTranscription appended to subject-specific file: {output_file}")
+    else:
+        output_file = append_to_weekly_file(final_output)
+        print(f"\nTranscription appended to weekly file: {output_file}")
+    
     print("\nCleaned transcription (post-clean):")
     print(final_output)
-    print(f"\nSuccessfully appended to {output_file}")
-
     return final_output
 
 if __name__ == "__main__":
